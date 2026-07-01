@@ -24,22 +24,12 @@ window.addEventListener('resize', fitCanvas);
 const net = new Net();
 const game = new ClientGame();
 
-// World-space converter — invert the fit-to-window transform used by render.
 function screenToWorld(sx: number, sy: number): { x: number; y: number } {
   const v = computeView(viewport);
   return { x: (sx - v.offsetX) / v.scale, y: (sy - v.offsetY) / v.scale };
 }
 
-// Attach input immediately — send loop only fires once we have an own player, but ok.
-const input = attachInput({
-  canvas,
-  net,
-  screenToWorld,
-  ownHeroPos: () => {
-    const own = game.ownPlayer();
-    return own ? { x: own.x, y: own.y } : null;
-  },
-});
+const input = attachInput({ canvas, net, game, screenToWorld });
 
 attachLobby(net, {
   onCreate: () => net.send({ type: 'createRoom' }),
@@ -51,6 +41,7 @@ net.onMessage((msg) => {
     game.playerId = msg.playerId;
     game.team = msg.team;
     game.roomCode = msg.roomCode;
+    game.myUnitIds = new Set(msg.unitIds);
     game.setMap(msg.mapSeed);
     setRoomCodeDisplay(msg.roomCode);
     showScreen('waiting');
@@ -75,8 +66,6 @@ net.onClose(() => {
   showScreen('disconnected');
 });
 
-// Dev: Vite serves the client on :5173 and the ws server is separate on :3001.
-// Prod: a single Node service serves both — connect same-origin (wss on HTTPS, ws on HTTP).
 const wsUrl = import.meta.env.DEV
   ? `ws://${location.hostname || 'localhost'}:3001`
   : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
@@ -84,7 +73,6 @@ net.connect(wsUrl).catch(() => {
   showLobbyError(`Cannot reach server at ${wsUrl}. Is it running?`);
 });
 
-// Render loop
 let lastTime = performance.now();
 let elapsed = 0;
 function frame(now: number): void {
@@ -93,9 +81,9 @@ function frame(now: number): void {
   elapsed += dt;
   game.updateEffects(dt);
   render(ctx!, game, viewport, elapsed, {
-    x: input.mouseCanvasX,
-    y: input.mouseCanvasY,
-  });
+    x: input.cursor?.x ?? 0,
+    y: input.cursor?.y ?? 0,
+  }, input.selectionBox);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

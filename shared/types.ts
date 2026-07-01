@@ -3,14 +3,7 @@ import type { Team, MatchStatus } from './constants.ts';
 export type ClientMessage =
   | { type: 'createRoom' }
   | { type: 'joinRoom'; roomCode: string }
-  | {
-      type: 'input';
-      seq: number;
-      moveX: number;      // -1..1
-      moveY: number;      // -1..1
-      aimAngle: number;   // radians
-      attack: boolean;
-    };
+  | { type: 'command'; seq: number; unitIds: string[]; target: { x: number; y: number } };
 
 export type ServerMessage =
   | {
@@ -19,21 +12,21 @@ export type ServerMessage =
       team: Team;
       roomCode: string;
       mapSeed: number;
+      unitIds: string[];        // which units this commander owns
     }
   | { type: 'error'; message: string }
   | { type: 'state'; snap: StateSnapshot };
 
-export interface PlayerSnapshot {
+export interface UnitSnapshot {
   id: string;
   team: Team;
   x: number;
   y: number;
   hp: number;
   alive: boolean;
-  aimAngle: number;
-  attackAnimT: number;         // 0..1 while swinging
-  carrying: Team | null;       // which team's flag they carry
-  score: number;
+  facing: number;               // radians, for direction-of-motion / attack
+  attackAnimT: number;          // 0..1 during swing
+  carrying: Team | null;
   respawnIn?: number;
 }
 
@@ -60,7 +53,7 @@ export interface CaptureEvent {
 
 export interface StateSnapshot {
   serverTime: number;
-  players: PlayerSnapshot[];
+  units: UnitSnapshot[];
   flags: FlagSnapshot[];
   scores: { red: number; blue: number };
   status: MatchStatus;

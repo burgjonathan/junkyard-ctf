@@ -27,9 +27,9 @@ export class RoomManager {
         const playerId = room.addPlayer(ws);
         if (!playerId) { sendError(ws, 'Room full'); return; }
         bound = { room, playerId };
-      } else if (msg.type === 'input') {
+      } else if (msg.type === 'command') {
         if (!bound) return;
-        bound.room.handleInput(bound.playerId, msg);
+        bound.room.handleMessage(bound.playerId, msg);
       }
     });
 

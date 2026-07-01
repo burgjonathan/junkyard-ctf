@@ -5,20 +5,29 @@ export const MAP_HEIGHT = 66;
 export const WORLD_WIDTH = MAP_WIDTH * TILE_SIZE;    // 2400
 export const WORLD_HEIGHT = MAP_HEIGHT * TILE_SIZE;  // 1584
 
-export const HERO_RADIUS = 14;
-export const HERO_SPEED = 205;
-export const HERO_MAX_HP = 100;
-export const HERO_RESPAWN_TIME = 3;
+// Squad-of-units mode: each player commands UNITS_PER_TEAM units.
+export const UNITS_PER_TEAM = 5;
+export const UNIT_RADIUS = 9;
+export const UNIT_SPEED = 145;
+export const UNIT_MAX_HP = 40;
+export const UNIT_RESPAWN_TIME = 5;
 
-export const ATTACK_COOLDOWN = 0.45;
-export const ATTACK_REACH = 42;
-export const ATTACK_ARC_RAD = (95 * Math.PI) / 180;
-export const ATTACK_DAMAGE = 25;
+export const ATTACK_COOLDOWN = 0.7;
+export const ATTACK_RANGE = 28;          // must be inside this to swing
+export const ATTACK_ARC_RAD = (100 * Math.PI) / 180;
+export const ATTACK_DAMAGE = 12;
 export const ATTACK_ANIM_TIME = 0.28;
 
-export const FLAG_PICKUP_RADIUS = 24;
+export const DETECTION_RANGE = 90;       // enemies noticed within this radius
+
+export const FLAG_PICKUP_RADIUS = 22;
 export const FLAG_CAPTURE_RADIUS = 34;
 export const FLAG_AUTORETURN_TIME = 6;
+
+// Camera control speeds (client only, but nice to keep with constants)
+export const CAMERA_KEY_SPEED = 800;
+export const EDGE_SCROLL_MARGIN = 22;
+export const EDGE_SCROLL_SPEED = 620;
 
 export const CAPTURES_TO_WIN = 3;
 

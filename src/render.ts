@@ -2,10 +2,9 @@ import {
   TILE_SIZE,
   WORLD_WIDTH,
   WORLD_HEIGHT,
-  HERO_RADIUS,
-  HERO_MAX_HP,
-  ATTACK_REACH,
-  ATTACK_ARC_RAD,
+  UNIT_RADIUS,
+  UNIT_MAX_HP,
+  ATTACK_RANGE,
   RED_BASE,
   BLUE_BASE,
   RED_BASE_TILE,
@@ -15,9 +14,10 @@ import {
   BASE_HALF,
   FLAG_CAPTURE_RADIUS,
   CAPTURES_TO_WIN,
+  UNITS_PER_TEAM,
   type Team,
 } from '../shared/constants.ts';
-import type { PlayerSnapshot, FlagSnapshot } from '../shared/types.ts';
+import type { UnitSnapshot, FlagSnapshot } from '../shared/types.ts';
 import { TILE, tileAt, type MapData } from '../shared/map.ts';
 import type { ClientGame, Effect } from './game.ts';
 
@@ -49,12 +49,13 @@ const COLORS = {
   hpGood:     '#7fe094',
   hpMid:      '#f6d76b',
   hpBad:      '#e04a3a',
+  selection:  '#ffdf5f',
+  cmd:        '#7fe094',
   hudBg:      'rgba(20, 15, 10, 0.85)',
   hudText:    '#f0e2c1',
   hudDim:     '#7a6e5a',
 };
 
-// Which team's base zone contains a given tile (or null if it's outside both).
 function tileTeam(tx: number, ty: number): Team | null {
   if (
     tx >= RED_BASE_TILE.x - BASE_HALF && tx <= RED_BASE_TILE.x + BASE_HALF &&
@@ -75,7 +76,6 @@ function isHqTile(tx: number, ty: number): boolean {
   return inRed || inBlue;
 }
 
-// Terrain cache — repaint whenever the map ref changes.
 let terrainCache: HTMLCanvasElement | null = null;
 let cachedMap: MapData | null = null;
 
@@ -95,7 +95,6 @@ function paintTerrain(ctx: CanvasRenderingContext2D, map: MapData): void {
   ctx.fillStyle = COLORS.sand;
   ctx.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
-  // Sand grit — hash-based deterministic dots
   ctx.fillStyle = COLORS.sandDot;
   for (let y = 0; y < WORLD_HEIGHT; y += 4) {
     for (let x = 0; x < WORLD_WIDTH; x += 4) {
@@ -111,21 +110,16 @@ function paintTerrain(ctx: CanvasRenderingContext2D, map: MapData): void {
     }
   }
 
-  // Base pads — soft team-colored halo on the ground inside each base
   paintBasePad(ctx, RED_BASE, COLORS.redPanel);
   paintBasePad(ctx, BLUE_BASE, COLORS.bluePanel);
 
-  // Walls (perimeter + HQ). Style depends on which base owns the tile.
   for (let ty = 0; ty < map.height; ty++) {
     for (let tx = 0; tx < map.width; tx++) {
       if (tileAt(map, tx, ty) !== TILE.ROCK) continue;
-      const team = tileTeam(tx, ty);
-      const hq = isHqTile(tx, ty);
-      paintWallTile(ctx, tx, ty, team, hq);
+      paintWallTile(ctx, tx, ty, tileTeam(tx, ty), isHqTile(tx, ty));
     }
   }
 
-  // Grid lines
   ctx.strokeStyle = COLORS.sandDark;
   ctx.globalAlpha = 0.22;
   ctx.beginPath();
@@ -157,37 +151,25 @@ function paintWallTile(
 ): void {
   const px = tx * TILE_SIZE;
   const py = ty * TILE_SIZE;
-
-  // Base slab
   ctx.fillStyle = COLORS.wall;
   ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-
-  // Top bevel highlight
   ctx.fillStyle = COLORS.wallHi;
   ctx.fillRect(px + 1, py + 1, TILE_SIZE - 2, 2);
-  // Bottom shadow
   ctx.fillStyle = COLORS.wallLo;
   ctx.fillRect(px + 1, py + TILE_SIZE - 3, TILE_SIZE - 2, 2);
-  // Left highlight, right shadow
   ctx.fillStyle = COLORS.wallHi;
   ctx.fillRect(px + 1, py + 3, 1, TILE_SIZE - 6);
   ctx.fillStyle = COLORS.wallLo;
   ctx.fillRect(px + TILE_SIZE - 2, py + 3, 1, TILE_SIZE - 6);
-
-  // Team-colored stripe along the top edge
   if (team) {
     ctx.fillStyle = team === 'red' ? COLORS.redAccent : COLORS.blueAccent;
     ctx.fillRect(px + 2, py + 4, TILE_SIZE - 4, 2);
   }
-
-  // Corner rivets
   ctx.fillStyle = COLORS.wallRivet;
   ctx.fillRect(px + 3, py + 8, 2, 2);
   ctx.fillRect(px + TILE_SIZE - 5, py + 8, 2, 2);
   ctx.fillRect(px + 3, py + TILE_SIZE - 6, 2, 2);
   ctx.fillRect(px + TILE_SIZE - 5, py + TILE_SIZE - 6, 2, 2);
-
-  // Subtle HQ marker — center panel
   if (isHq && team) {
     ctx.fillStyle = team === 'red' ? COLORS.redPanel : COLORS.bluePanel;
     ctx.fillRect(px + 6, py + 12, TILE_SIZE - 12, TILE_SIZE - 16);
@@ -198,8 +180,6 @@ function paintWallTile(
 
 // ----- Public entry -----
 
-// Compute the world→screen transform used for both rendering and mouse hit-tests.
-// Fit-to-window: scale so the whole world fits with a small margin, then center.
 export function computeView(viewport: { width: number; height: number }): { scale: number; offsetX: number; offsetY: number } {
   const scale = Math.min(viewport.width / WORLD_WIDTH, viewport.height / WORLD_HEIGHT) * 0.96;
   const offsetX = (viewport.width - WORLD_WIDTH * scale) / 2;
@@ -213,6 +193,7 @@ export function render(
   viewport: { width: number; height: number },
   time: number,
   mouseCanvas: { x: number; y: number },
+  selectionBox: { x0: number; y0: number; x1: number; y1: number } | null,
 ): void {
   ctx.fillStyle = COLORS.bg;
   ctx.fillRect(0, 0, viewport.width, viewport.height);
@@ -236,12 +217,13 @@ export function render(
 
   for (const flag of game.latest.flags) drawFlag(ctx, flag, time);
 
-  for (const p of game.latest.players) drawPlayer(ctx, p, time, p.id === game.playerId);
+  for (const u of game.latest.units) drawUnit(ctx, u, time, game);
 
   for (const e of game.effects) drawEffect(ctx, e);
 
   ctx.restore();
 
+  if (selectionBox) drawSelectionBox(ctx, selectionBox);
   drawHud(ctx, game, viewport, time);
   drawAimReticle(ctx, mouseCanvas);
 }
@@ -255,30 +237,25 @@ function drawHq(
   const teamDark  = team === 'red' ? COLORS.redDark : COLORS.blueDark;
   const teamPanel = team === 'red' ? COLORS.redPanel : COLORS.bluePanel;
 
-  // Building shadow
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fillRect(px + 3, py + 5, w - 4, h - 3);
 
-  // Main tower body — inset from the tile footprint so we see the wall base tiles peeking around it
-  const insetX = 4, insetY = 4;
-  const bodyX = px + insetX;
-  const bodyY = py + insetY;
-  const bodyW = w - insetX * 2;
-  const bodyH = h - insetY * 2;
-
+  const inset = 4;
+  const bodyX = px + inset;
+  const bodyY = py + inset;
+  const bodyW = w - inset * 2;
+  const bodyH = h - inset * 2;
   ctx.fillStyle = COLORS.hqRoof;
   ctx.fillRect(bodyX, bodyY, bodyW, bodyH);
   ctx.strokeStyle = COLORS.hqRoofHi;
   ctx.lineWidth = 2;
   ctx.strokeRect(bodyX + 0.5, bodyY + 0.5, bodyW, bodyH);
 
-  // Roof stripe for team color
   ctx.fillStyle = teamColor;
   ctx.fillRect(bodyX + 3, bodyY + 3, bodyW - 6, 5);
   ctx.fillStyle = teamDark;
   ctx.fillRect(bodyX + 3, bodyY + 8, bodyW - 6, 1);
 
-  // Central panel (viewport / window)
   const winW = bodyW - 14;
   const winH = 12;
   const winX = bodyX + (bodyW - winW) / 2;
@@ -288,14 +265,12 @@ function drawHq(
   ctx.strokeStyle = COLORS.hqRoofHi;
   ctx.lineWidth = 1;
   ctx.strokeRect(winX + 0.5, winY + 0.5, winW, winH);
-  // Scanning light bar
   const sweep = ((time * 25 + (team === 'red' ? 0 : 40)) % (winW - 2));
   ctx.fillStyle = teamColor;
   ctx.globalAlpha = 0.9;
   ctx.fillRect(winX + 1 + sweep, winY + 2, 2, winH - 4);
   ctx.globalAlpha = 1;
 
-  // Bay door on the bottom
   const doorW = Math.min(20, bodyW - 8);
   const doorH = 10;
   const doorX = bodyX + (bodyW - doorW) / 2;
@@ -310,7 +285,6 @@ function drawHq(
   }
   ctx.stroke();
 
-  // Rooftop antenna with blinking beacon
   const antX = bodyX + bodyW - 8;
   const antTopY = bodyY - 12;
   ctx.strokeStyle = COLORS.hqAntenna;
@@ -325,9 +299,7 @@ function drawHq(
   ctx.fillRect(antX - 1, antTopY - 2, 3, 3);
   ctx.globalAlpha = 1;
 
-  // Corner floodlights
-  const light = COLORS.hqLight;
-  ctx.fillStyle = light;
+  ctx.fillStyle = COLORS.hqLight;
   ctx.fillRect(bodyX + 2, bodyY + bodyH - 6, 2, 2);
   ctx.fillRect(bodyX + bodyW - 4, bodyY + bodyH - 6, 2, 2);
 }
@@ -341,14 +313,12 @@ function drawBase(ctx: CanvasRenderingContext2D, base: { x: number; y: number },
   ctx.beginPath();
   ctx.arc(base.x, base.y, FLAG_CAPTURE_RADIUS + 4, 0, Math.PI * 2);
   ctx.fill();
-
   ctx.strokeStyle = darkColor;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.arc(base.x, base.y, FLAG_CAPTURE_RADIUS + 4, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Animated rotating stripes
   ctx.save();
   ctx.translate(base.x, base.y);
   ctx.rotate(time * 0.4 * (team === 'red' ? 1 : -1));
@@ -371,17 +341,14 @@ function drawFlag(ctx: CanvasRenderingContext2D, flag: FlagSnapshot, time: numbe
   const x = flag.x;
   const y = flag.y;
 
-  // Shadow
   ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.beginPath();
   ctx.ellipse(x, y + 8, 7, 2.5, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Pole
   ctx.fillStyle = COLORS.flagPole;
   ctx.fillRect(x - 1, y - 14, 2, 22);
 
-  // Flag cloth — wave with time
   const wave = Math.sin(time * 4 + x * 0.02) * 1.4;
   ctx.beginPath();
   ctx.moveTo(x + 1, y - 14);
@@ -395,7 +362,6 @@ function drawFlag(ctx: CanvasRenderingContext2D, flag: FlagSnapshot, time: numbe
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // "Not at home" indicator: dropped flag pulses
   if (!flag.atHome && !flag.carriedBy) {
     const pulse = 0.4 + 0.4 * Math.sin(time * 6);
     ctx.strokeStyle = teamColor;
@@ -408,92 +374,92 @@ function drawFlag(ctx: CanvasRenderingContext2D, flag: FlagSnapshot, time: numbe
   }
 }
 
-function drawPlayer(ctx: CanvasRenderingContext2D, p: PlayerSnapshot, time: number, isOwn: boolean): void {
-  if (!p.alive) {
-    // "Ghost" marker while dead — small X at last position
-    ctx.strokeStyle = p.team === 'red' ? COLORS.redDark : COLORS.blueDark;
+function drawUnit(ctx: CanvasRenderingContext2D, u: UnitSnapshot, time: number, game: ClientGame): void {
+  if (!u.alive) {
+    ctx.strokeStyle = u.team === 'red' ? COLORS.redDark : COLORS.blueDark;
     ctx.globalAlpha = 0.5;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(p.x - 5, p.y - 5); ctx.lineTo(p.x + 5, p.y + 5);
-    ctx.moveTo(p.x - 5, p.y + 5); ctx.lineTo(p.x + 5, p.y - 5);
+    ctx.moveTo(u.x - 4, u.y - 4); ctx.lineTo(u.x + 4, u.y + 4);
+    ctx.moveTo(u.x - 4, u.y + 4); ctx.lineTo(u.x + 4, u.y - 4);
     ctx.stroke();
     ctx.globalAlpha = 1;
     return;
   }
+  const isMine = game.myUnitIds.has(u.id);
+  const isSelected = isMine && game.selectedUnitIds.has(u.id);
 
-  const teamColor = p.team === 'red' ? COLORS.red : COLORS.blue;
-  const darkColor = p.team === 'red' ? COLORS.redDark : COLORS.blueDark;
+  const teamColor = u.team === 'red' ? COLORS.red : COLORS.blue;
+  const darkColor = u.team === 'red' ? COLORS.redDark : COLORS.blueDark;
 
-  // Shadow
   ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.beginPath();
-  ctx.ellipse(p.x + 1, p.y + 3, HERO_RADIUS, HERO_RADIUS * 0.5, 0, 0, Math.PI * 2);
+  ctx.ellipse(u.x + 1, u.y + 3, UNIT_RADIUS, UNIT_RADIUS * 0.5, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Own-hero indicator ring (pulsing)
-  if (isOwn) {
-    const pulse = 0.5 + 0.5 * Math.sin(time * 4);
+  if (isSelected) {
+    const pulse = 0.6 + 0.4 * Math.sin(time * 5);
     ctx.strokeStyle = `rgba(255, 223, 95, ${pulse.toFixed(3)})`;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, HERO_RADIUS + 4, 0, Math.PI * 2);
+    ctx.arc(u.x, u.y, UNIT_RADIUS + 3, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (isMine) {
+    ctx.strokeStyle = `rgba(255, 223, 95, 0.35)`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(u.x, u.y, UNIT_RADIUS + 2, 0, Math.PI * 2);
     ctx.stroke();
   }
 
-  // Body
   ctx.fillStyle = teamColor;
   ctx.beginPath();
-  ctx.arc(p.x, p.y, HERO_RADIUS, 0, Math.PI * 2);
+  ctx.arc(u.x, u.y, UNIT_RADIUS, 0, Math.PI * 2);
   ctx.fill();
   ctx.strokeStyle = darkColor;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Aim indicator — small notch pointing forward
-  const notchX = p.x + Math.cos(p.aimAngle) * (HERO_RADIUS - 1);
-  const notchY = p.y + Math.sin(p.aimAngle) * (HERO_RADIUS - 1);
+  const notchX = u.x + Math.cos(u.facing) * (UNIT_RADIUS - 1);
+  const notchY = u.y + Math.sin(u.facing) * (UNIT_RADIUS - 1);
   ctx.fillStyle = '#fff2a8';
   ctx.beginPath();
-  ctx.arc(notchX, notchY, 2.2, 0, Math.PI * 2);
+  ctx.arc(notchX, notchY, 1.8, 0, Math.PI * 2);
   ctx.fill();
 
-  // Attack swing arc (visible when attackAnimT > 0)
-  if (p.attackAnimT > 0.01) {
-    const swing = p.attackAnimT; // 1..0
+  if (u.attackAnimT > 0.01) {
+    const swing = u.attackAnimT;
     ctx.strokeStyle = teamColor;
     ctx.globalAlpha = swing * 0.85;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, ATTACK_REACH * (1 - swing * 0.15),
-      p.aimAngle - ATTACK_ARC_RAD / 2,
-      p.aimAngle + ATTACK_ARC_RAD / 2);
+    ctx.arc(u.x, u.y, ATTACK_RANGE * (1 - swing * 0.15),
+      u.facing - Math.PI * 0.4,
+      u.facing + Math.PI * 0.4);
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
-  // HP bar over head
-  const barW = 22;
-  const barH = 4;
-  const barX = p.x - barW / 2;
-  const barY = p.y - HERO_RADIUS - 8;
+  const barW = 18;
+  const barH = 3;
+  const barX = u.x - barW / 2;
+  const barY = u.y - UNIT_RADIUS - 6;
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
   ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
-  const pct = Math.max(0, p.hp / HERO_MAX_HP);
+  const pct = Math.max(0, u.hp / UNIT_MAX_HP);
   ctx.fillStyle = pct > 0.6 ? COLORS.hpGood : pct > 0.3 ? COLORS.hpMid : COLORS.hpBad;
   ctx.fillRect(barX, barY, barW * pct, barH);
 
-  // Flag icon on top if carrying
-  if (p.carrying) {
-    const carriedColor = p.carrying === 'red' ? COLORS.red : COLORS.blue;
+  if (u.carrying) {
+    const carriedColor = u.carrying === 'red' ? COLORS.red : COLORS.blue;
     ctx.fillStyle = COLORS.flagPole;
-    ctx.fillRect(p.x - 1, p.y - HERO_RADIUS - 20, 2, 12);
+    ctx.fillRect(u.x - 1, u.y - UNIT_RADIUS - 16, 2, 10);
     ctx.fillStyle = carriedColor;
     ctx.beginPath();
-    ctx.moveTo(p.x + 1, p.y - HERO_RADIUS - 20);
-    ctx.lineTo(p.x + 8, p.y - HERO_RADIUS - 18);
-    ctx.lineTo(p.x + 8, p.y - HERO_RADIUS - 14);
-    ctx.lineTo(p.x + 1, p.y - HERO_RADIUS - 12);
+    ctx.moveTo(u.x + 1, u.y - UNIT_RADIUS - 16);
+    ctx.lineTo(u.x + 6, u.y - UNIT_RADIUS - 14);
+    ctx.lineTo(u.x + 6, u.y - UNIT_RADIUS - 10);
+    ctx.lineTo(u.x + 1, u.y - UNIT_RADIUS - 8);
     ctx.closePath();
     ctx.fill();
   }
@@ -502,23 +468,21 @@ function drawPlayer(ctx: CanvasRenderingContext2D, p: PlayerSnapshot, time: numb
 function drawEffect(ctx: CanvasRenderingContext2D, e: Effect): void {
   const t = Math.max(0, e.life / e.maxLife);
   if (e.kind === 'hit') {
-    // Burst of short lines radiating outward
-    const color = e.team === 'red' ? COLORS.red : COLORS.blue;
+    const color = e.team === 'red' ? COLORS.red : e.team === 'blue' ? COLORS.blue : COLORS.hudText;
     ctx.strokeStyle = color;
     ctx.globalAlpha = t;
     ctx.lineWidth = 2;
-    const radius = (1 - t) * 14 + 4;
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + (1 - t) * 0.5;
+    const radius = (1 - t) * 12 + 4;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + (1 - t) * 0.5;
       ctx.beginPath();
-      ctx.moveTo(e.x + Math.cos(a) * (radius - 4), e.y + Math.sin(a) * (radius - 4));
+      ctx.moveTo(e.x + Math.cos(a) * (radius - 3), e.y + Math.sin(a) * (radius - 3));
       ctx.lineTo(e.x + Math.cos(a) * radius, e.y + Math.sin(a) * radius);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-  } else {
-    // Capture: big expanding ring
-    const color = e.team === 'red' ? COLORS.red : COLORS.blue;
+  } else if (e.kind === 'capture') {
+    const color = e.team === 'red' ? COLORS.red : e.team === 'blue' ? COLORS.blue : COLORS.hudText;
     ctx.strokeStyle = color;
     ctx.globalAlpha = t;
     ctx.lineWidth = 3;
@@ -527,14 +491,37 @@ function drawEffect(ctx: CanvasRenderingContext2D, e: Effect): void {
     ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
     ctx.stroke();
     ctx.globalAlpha = 1;
+  } else if (e.kind === 'commandMove') {
+    ctx.strokeStyle = COLORS.cmd;
+    ctx.globalAlpha = t;
+    ctx.lineWidth = 2;
+    const r = (1 - t) * 14 + 3;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
+}
+
+function drawSelectionBox(
+  ctx: CanvasRenderingContext2D,
+  box: { x0: number; y0: number; x1: number; y1: number },
+): void {
+  const x = Math.min(box.x0, box.x1);
+  const y = Math.min(box.y0, box.y1);
+  const w = Math.abs(box.x1 - box.x0);
+  const h = Math.abs(box.y1 - box.y0);
+  ctx.fillStyle = 'rgba(255, 223, 95, 0.14)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = COLORS.selection;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w, h);
 }
 
 function drawHud(ctx: CanvasRenderingContext2D, game: ClientGame, viewport: { width: number; height: number }, _time: number): void {
   if (!game.latest) return;
   const snap = game.latest;
 
-  // Central scoreboard
   const scoreW = 260;
   const scoreH = 46;
   const sx = (viewport.width - scoreW) / 2;
@@ -554,49 +541,39 @@ function drawHud(ctx: CanvasRenderingContext2D, game: ClientGame, viewport: { wi
   ctx.fillText(String(snap.scores.blue), sx + scoreW - 60, sy + scoreH / 2);
   ctx.textAlign = 'start';
 
-  // "To win" text under scoreboard
   ctx.font = '11px ui-monospace, Consolas, monospace';
   ctx.textAlign = 'center';
   ctx.fillStyle = COLORS.hudDim;
   ctx.fillText(`FIRST TO ${CAPTURES_TO_WIN}`, viewport.width / 2, sy + scoreH + 12);
   ctx.textAlign = 'start';
 
-  // Own HP + status (bottom left)
-  const own = game.ownPlayer();
-  if (own) {
-    const hp = Math.max(0, Math.round(own.hp));
-    const hudX = 14;
-    const hudY = viewport.height - 66;
-    ctx.fillStyle = COLORS.hudBg;
-    ctx.fillRect(hudX, hudY, 220, 52);
-    ctx.strokeStyle = '#4a4032';
-    ctx.strokeRect(hudX + 0.5, hudY + 0.5, 220, 52);
-    ctx.font = 'bold 12px ui-monospace, Consolas, monospace';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = own.team === 'red' ? COLORS.red : COLORS.blue;
-    ctx.fillText(`YOU (${own.team.toUpperCase()})`, hudX + 10, hudY + 8);
-    ctx.font = '11px ui-monospace, Consolas, monospace';
-    ctx.fillStyle = COLORS.hudText;
-    if (own.alive) {
-      ctx.fillText(`HP ${hp}/${HERO_MAX_HP}`, hudX + 10, hudY + 24);
-      // HP bar
-      const barW = 180;
-      const barH = 6;
-      const barX = hudX + 10;
-      const barY = hudY + 40;
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      ctx.fillRect(barX, barY, barW, barH);
-      const pct = Math.max(0, own.hp / HERO_MAX_HP);
-      ctx.fillStyle = pct > 0.6 ? COLORS.hpGood : pct > 0.3 ? COLORS.hpMid : COLORS.hpBad;
-      ctx.fillRect(barX, barY, barW * pct, barH);
-    } else {
-      ctx.fillStyle = COLORS.hpBad;
-      const t = own.respawnIn ?? 0;
-      ctx.fillText(`RESPAWN IN ${t.toFixed(1)}s`, hudX + 10, hudY + 24);
-    }
+  // Squad status bottom-left
+  const myUnits = game.myUnits();
+  const alive = myUnits.filter(u => u.alive).length;
+  const carrying = myUnits.find(u => u.carrying);
+  const hudX = 14;
+  const hudY = viewport.height - 90;
+  ctx.fillStyle = COLORS.hudBg;
+  ctx.fillRect(hudX, hudY, 260, 76);
+  ctx.strokeStyle = '#4a4032';
+  ctx.strokeRect(hudX + 0.5, hudY + 0.5, 260, 76);
+  ctx.font = 'bold 12px ui-monospace, Consolas, monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = game.team === 'red' ? COLORS.red : COLORS.blue;
+  ctx.fillText(`SQUAD (${game.team?.toUpperCase() ?? '?'})`, hudX + 10, hudY + 8);
+  ctx.font = '11px ui-monospace, Consolas, monospace';
+  ctx.fillStyle = COLORS.hudText;
+  ctx.fillText(`Alive: ${alive}/${UNITS_PER_TEAM}`, hudX + 10, hudY + 26);
+  ctx.fillText(`Selected: ${game.selectedUnitIds.size}`, hudX + 10, hudY + 42);
+  if (carrying) {
+    ctx.fillStyle = COLORS.hpGood;
+    ctx.fillText('CARRYING FLAG', hudX + 10, hudY + 58);
+  } else {
+    ctx.fillStyle = COLORS.hudDim;
+    ctx.fillText('R-click to move  |  drag to select', hudX + 10, hudY + 58);
   }
 
-  // Room code in top-right
+  // Room code top-right
   if (game.roomCode) {
     ctx.font = '11px ui-monospace, Consolas, monospace';
     ctx.textBaseline = 'top';
@@ -606,7 +583,6 @@ function drawHud(ctx: CanvasRenderingContext2D, game: ClientGame, viewport: { wi
     ctx.textAlign = 'start';
   }
 
-  // "Waiting for opponent" overlay text if match hasn't started
   if (snap.status === 'waiting') {
     ctx.font = 'bold 20px ui-monospace, Consolas, monospace';
     ctx.textBaseline = 'middle';
@@ -618,15 +594,9 @@ function drawHud(ctx: CanvasRenderingContext2D, game: ClientGame, viewport: { wi
 }
 
 function drawAimReticle(ctx: CanvasRenderingContext2D, m: { x: number; y: number }): void {
-  ctx.strokeStyle = 'rgba(255, 223, 95, 0.65)';
+  ctx.strokeStyle = 'rgba(255, 223, 95, 0.5)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.arc(m.x, m.y, 6, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(m.x - 10, m.y); ctx.lineTo(m.x - 3, m.y);
-  ctx.moveTo(m.x + 10, m.y); ctx.lineTo(m.x + 3, m.y);
-  ctx.moveTo(m.x, m.y - 10); ctx.lineTo(m.x, m.y - 3);
-  ctx.moveTo(m.x, m.y + 10); ctx.lineTo(m.x, m.y + 3);
+  ctx.arc(m.x, m.y, 5, 0, Math.PI * 2);
   ctx.stroke();
 }
