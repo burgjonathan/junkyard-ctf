@@ -37,5 +37,11 @@ export const BLUE_BASE = {
   y: (BLUE_BASE_TILE.y + 0.5) * TILE_SIZE,
 };
 
+// Bases are 9x9 walled rectangles centered on the base tile.
+export const BASE_HALF = 4;
+// HQ building is 2x2 tiles inside each base, tucked against the back wall.
+export const RED_HQ = { x: RED_BASE_TILE.x - 3, y: RED_BASE_TILE.y - 1, w: 2, h: 2 };
+export const BLUE_HQ = { x: BLUE_BASE_TILE.x + 1, y: BLUE_BASE_TILE.y - 1, w: 2, h: 2 };
+
 export type Team = 'red' | 'blue';
 export type MatchStatus = 'waiting' | 'playing' | 'ended';

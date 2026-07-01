@@ -8,6 +8,11 @@ import {
   ATTACK_ARC_RAD,
   RED_BASE,
   BLUE_BASE,
+  RED_BASE_TILE,
+  BLUE_BASE_TILE,
+  RED_HQ,
+  BLUE_HQ,
+  BASE_HALF,
   FLAG_CAPTURE_RADIUS,
   CAPTURES_TO_WIN,
   type Team,
@@ -21,15 +26,25 @@ const COLORS = {
   sand:       '#3b3226',
   sandDot:    '#4a3f30',
   sandDark:   '#2b241a',
-  rock:       '#5a4b3a',
-  rockHi:     '#7c6a52',
-  rockLo:     '#3d3325',
+  wall:       '#4a4a52',
+  wallHi:     '#7c7c88',
+  wallLo:     '#25252b',
+  wallRivet:  '#a8a8b4',
   red:        '#e05a5a',
   redDark:    '#7a2020',
   redPad:     '#4a1a1a',
+  redAccent:  '#c33b3b',
+  redPanel:   '#5a2828',
   blue:       '#5aa8ff',
   blueDark:   '#1e4e80',
   bluePad:    '#1a2c4a',
+  blueAccent: '#3b7dc3',
+  bluePanel:  '#233854',
+  hqRoof:     '#3a3a44',
+  hqRoofHi:   '#585866',
+  hqDoor:     '#141014',
+  hqAntenna:  '#1a1a20',
+  hqLight:    '#f6d76b',
   flagPole:   '#a0947a',
   hpGood:     '#7fe094',
   hpMid:      '#f6d76b',
@@ -38,6 +53,27 @@ const COLORS = {
   hudText:    '#f0e2c1',
   hudDim:     '#7a6e5a',
 };
+
+// Which team's base zone contains a given tile (or null if it's outside both).
+function tileTeam(tx: number, ty: number): Team | null {
+  if (
+    tx >= RED_BASE_TILE.x - BASE_HALF && tx <= RED_BASE_TILE.x + BASE_HALF &&
+    ty >= RED_BASE_TILE.y - BASE_HALF && ty <= RED_BASE_TILE.y + BASE_HALF
+  ) return 'red';
+  if (
+    tx >= BLUE_BASE_TILE.x - BASE_HALF && tx <= BLUE_BASE_TILE.x + BASE_HALF &&
+    ty >= BLUE_BASE_TILE.y - BASE_HALF && ty <= BLUE_BASE_TILE.y + BASE_HALF
+  ) return 'blue';
+  return null;
+}
+
+function isHqTile(tx: number, ty: number): boolean {
+  const inRed = tx >= RED_HQ.x && tx < RED_HQ.x + RED_HQ.w
+             && ty >= RED_HQ.y && ty < RED_HQ.y + RED_HQ.h;
+  const inBlue = tx >= BLUE_HQ.x && tx < BLUE_HQ.x + BLUE_HQ.w
+              && ty >= BLUE_HQ.y && ty < BLUE_HQ.y + BLUE_HQ.h;
+  return inRed || inBlue;
+}
 
 // Terrain cache — repaint whenever the map ref changes.
 let terrainCache: HTMLCanvasElement | null = null;
@@ -75,15 +111,23 @@ function paintTerrain(ctx: CanvasRenderingContext2D, map: MapData): void {
     }
   }
 
+  // Base pads — soft team-colored halo on the ground inside each base
+  paintBasePad(ctx, RED_BASE, COLORS.redPanel);
+  paintBasePad(ctx, BLUE_BASE, COLORS.bluePanel);
+
+  // Walls (perimeter + HQ). Style depends on which base owns the tile.
   for (let ty = 0; ty < map.height; ty++) {
     for (let tx = 0; tx < map.width; tx++) {
-      if (tileAt(map, tx, ty) === TILE.ROCK) paintRockTile(ctx, tx, ty);
+      if (tileAt(map, tx, ty) !== TILE.ROCK) continue;
+      const team = tileTeam(tx, ty);
+      const hq = isHqTile(tx, ty);
+      paintWallTile(ctx, tx, ty, team, hq);
     }
   }
 
   // Grid lines
   ctx.strokeStyle = COLORS.sandDark;
-  ctx.globalAlpha = 0.28;
+  ctx.globalAlpha = 0.22;
   ctx.beginPath();
   for (let x = 0; x <= map.width; x++) {
     ctx.moveTo(x * TILE_SIZE + 0.5, 0);
@@ -97,20 +141,59 @@ function paintTerrain(ctx: CanvasRenderingContext2D, map: MapData): void {
   ctx.globalAlpha = 1;
 }
 
-function paintRockTile(ctx: CanvasRenderingContext2D, tx: number, ty: number): void {
+function paintBasePad(ctx: CanvasRenderingContext2D, base: { x: number; y: number }, color: string): void {
+  const size = BASE_HALF * TILE_SIZE - 4;
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.35;
+  ctx.fillRect(base.x - size, base.y - size, size * 2, size * 2);
+  ctx.globalAlpha = 1;
+}
+
+function paintWallTile(
+  ctx: CanvasRenderingContext2D,
+  tx: number, ty: number,
+  team: Team | null,
+  isHq: boolean,
+): void {
   const px = tx * TILE_SIZE;
   const py = ty * TILE_SIZE;
-  const h = ((tx * 73856093) ^ (ty * 19349663)) >>> 0;
-  ctx.fillStyle = COLORS.rock;
+
+  // Base slab
+  ctx.fillStyle = COLORS.wall;
   ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-  ctx.fillStyle = COLORS.rockHi;
-  ctx.fillRect(px + 2, py + 2, TILE_SIZE - 6, 2);
-  ctx.fillRect(px + 2, py + 2, 2, TILE_SIZE - 6);
-  ctx.fillStyle = COLORS.rockLo;
-  ctx.fillRect(px + 4, py + TILE_SIZE - 4, TILE_SIZE - 6, 2);
-  ctx.fillRect(px + TILE_SIZE - 4, py + 4, 2, TILE_SIZE - 6);
-  if (h & 1) { ctx.fillStyle = COLORS.rockLo; ctx.fillRect(px + 6, py + 6, 3, 3); }
-  if (h & 2) { ctx.fillStyle = COLORS.rockHi; ctx.fillRect(px + 14, py + 8, 3, 3); }
+
+  // Top bevel highlight
+  ctx.fillStyle = COLORS.wallHi;
+  ctx.fillRect(px + 1, py + 1, TILE_SIZE - 2, 2);
+  // Bottom shadow
+  ctx.fillStyle = COLORS.wallLo;
+  ctx.fillRect(px + 1, py + TILE_SIZE - 3, TILE_SIZE - 2, 2);
+  // Left highlight, right shadow
+  ctx.fillStyle = COLORS.wallHi;
+  ctx.fillRect(px + 1, py + 3, 1, TILE_SIZE - 6);
+  ctx.fillStyle = COLORS.wallLo;
+  ctx.fillRect(px + TILE_SIZE - 2, py + 3, 1, TILE_SIZE - 6);
+
+  // Team-colored stripe along the top edge
+  if (team) {
+    ctx.fillStyle = team === 'red' ? COLORS.redAccent : COLORS.blueAccent;
+    ctx.fillRect(px + 2, py + 4, TILE_SIZE - 4, 2);
+  }
+
+  // Corner rivets
+  ctx.fillStyle = COLORS.wallRivet;
+  ctx.fillRect(px + 3, py + 8, 2, 2);
+  ctx.fillRect(px + TILE_SIZE - 5, py + 8, 2, 2);
+  ctx.fillRect(px + 3, py + TILE_SIZE - 6, 2, 2);
+  ctx.fillRect(px + TILE_SIZE - 5, py + TILE_SIZE - 6, 2, 2);
+
+  // Subtle HQ marker — center panel
+  if (isHq && team) {
+    ctx.fillStyle = team === 'red' ? COLORS.redPanel : COLORS.bluePanel;
+    ctx.fillRect(px + 6, py + 12, TILE_SIZE - 12, TILE_SIZE - 16);
+    ctx.fillStyle = team === 'red' ? COLORS.red : COLORS.blue;
+    ctx.fillRect(px + 8, py + 14, TILE_SIZE - 16, 2);
+  }
 }
 
 // ----- Public entry -----
@@ -148,6 +231,9 @@ export function render(
   drawBase(ctx, RED_BASE, 'red', time);
   drawBase(ctx, BLUE_BASE, 'blue', time);
 
+  drawHq(ctx, RED_HQ.x * TILE_SIZE, RED_HQ.y * TILE_SIZE, RED_HQ.w * TILE_SIZE, RED_HQ.h * TILE_SIZE, 'red', time);
+  drawHq(ctx, BLUE_HQ.x * TILE_SIZE, BLUE_HQ.y * TILE_SIZE, BLUE_HQ.w * TILE_SIZE, BLUE_HQ.h * TILE_SIZE, 'blue', time);
+
   for (const flag of game.latest.flags) drawFlag(ctx, flag, time);
 
   for (const p of game.latest.players) drawPlayer(ctx, p, time, p.id === game.playerId);
@@ -158,6 +244,92 @@ export function render(
 
   drawHud(ctx, game, viewport, time);
   drawAimReticle(ctx, mouseCanvas);
+}
+
+function drawHq(
+  ctx: CanvasRenderingContext2D,
+  px: number, py: number, w: number, h: number,
+  team: Team, time: number,
+): void {
+  const teamColor = team === 'red' ? COLORS.red : COLORS.blue;
+  const teamDark  = team === 'red' ? COLORS.redDark : COLORS.blueDark;
+  const teamPanel = team === 'red' ? COLORS.redPanel : COLORS.bluePanel;
+
+  // Building shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(px + 3, py + 5, w - 4, h - 3);
+
+  // Main tower body — inset from the tile footprint so we see the wall base tiles peeking around it
+  const insetX = 4, insetY = 4;
+  const bodyX = px + insetX;
+  const bodyY = py + insetY;
+  const bodyW = w - insetX * 2;
+  const bodyH = h - insetY * 2;
+
+  ctx.fillStyle = COLORS.hqRoof;
+  ctx.fillRect(bodyX, bodyY, bodyW, bodyH);
+  ctx.strokeStyle = COLORS.hqRoofHi;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bodyX + 0.5, bodyY + 0.5, bodyW, bodyH);
+
+  // Roof stripe for team color
+  ctx.fillStyle = teamColor;
+  ctx.fillRect(bodyX + 3, bodyY + 3, bodyW - 6, 5);
+  ctx.fillStyle = teamDark;
+  ctx.fillRect(bodyX + 3, bodyY + 8, bodyW - 6, 1);
+
+  // Central panel (viewport / window)
+  const winW = bodyW - 14;
+  const winH = 12;
+  const winX = bodyX + (bodyW - winW) / 2;
+  const winY = bodyY + bodyH / 2 - 4;
+  ctx.fillStyle = teamPanel;
+  ctx.fillRect(winX, winY, winW, winH);
+  ctx.strokeStyle = COLORS.hqRoofHi;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(winX + 0.5, winY + 0.5, winW, winH);
+  // Scanning light bar
+  const sweep = ((time * 25 + (team === 'red' ? 0 : 40)) % (winW - 2));
+  ctx.fillStyle = teamColor;
+  ctx.globalAlpha = 0.9;
+  ctx.fillRect(winX + 1 + sweep, winY + 2, 2, winH - 4);
+  ctx.globalAlpha = 1;
+
+  // Bay door on the bottom
+  const doorW = Math.min(20, bodyW - 8);
+  const doorH = 10;
+  const doorX = bodyX + (bodyW - doorW) / 2;
+  const doorY = bodyY + bodyH - doorH - 2;
+  ctx.fillStyle = COLORS.hqDoor;
+  ctx.fillRect(doorX, doorY, doorW, doorH);
+  ctx.strokeStyle = COLORS.hqRoofHi;
+  ctx.beginPath();
+  for (let sy = doorY + 2; sy < doorY + doorH; sy += 2) {
+    ctx.moveTo(doorX + 0.5, sy + 0.5);
+    ctx.lineTo(doorX + doorW - 0.5, sy + 0.5);
+  }
+  ctx.stroke();
+
+  // Rooftop antenna with blinking beacon
+  const antX = bodyX + bodyW - 8;
+  const antTopY = bodyY - 12;
+  ctx.strokeStyle = COLORS.hqAntenna;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(antX + 0.5, bodyY);
+  ctx.lineTo(antX + 0.5, antTopY);
+  ctx.stroke();
+  const blink = (Math.sin(time * 5 + (team === 'red' ? 0 : Math.PI)) * 0.5 + 0.5);
+  ctx.fillStyle = team === 'red' ? '#ff8080' : '#80c8ff';
+  ctx.globalAlpha = 0.4 + blink * 0.6;
+  ctx.fillRect(antX - 1, antTopY - 2, 3, 3);
+  ctx.globalAlpha = 1;
+
+  // Corner floodlights
+  const light = COLORS.hqLight;
+  ctx.fillStyle = light;
+  ctx.fillRect(bodyX + 2, bodyY + bodyH - 6, 2, 2);
+  ctx.fillRect(bodyX + bodyW - 4, bodyY + bodyH - 6, 2, 2);
 }
 
 function drawBase(ctx: CanvasRenderingContext2D, base: { x: number; y: number }, team: Team, time: number): void {
