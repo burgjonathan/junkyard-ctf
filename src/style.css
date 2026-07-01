@@ -1,0 +1,23 @@
+:root {
+  color-scheme: dark;
+  font: 14px/1.4 ui-monospace, Consolas, monospace;
+  background: #14110e;
+  color: #d8cdb8;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  background: #2b241c;
+  image-rendering: pixelated;
+  cursor: crosshair;
+  user-select: none;
+}
