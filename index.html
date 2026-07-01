@@ -3,10 +3,50 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Junkyard RTS</title>
+    <title>Junkyard CTF</title>
   </head>
   <body>
     <canvas id="game"></canvas>
+
+    <div id="lobby" class="overlay">
+      <div class="panel">
+        <h1>Junkyard <span class="accent-red">C</span><span class="accent-blue">TF</span></h1>
+        <p class="tag">1v1 capture the flag &middot; melee prototype</p>
+        <button id="btn-create" class="big">Create Room</button>
+        <div class="sep"><span>or</span></div>
+        <div class="join-row">
+          <input id="input-code" placeholder="CODE" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+          <button id="btn-join" class="big">Join</button>
+        </div>
+        <div id="lobby-msg" class="msg"></div>
+      </div>
+    </div>
+
+    <div id="waiting" class="overlay hidden">
+      <div class="panel">
+        <h2>Room code</h2>
+        <div class="room-code" id="room-code">----</div>
+        <p>Share this code with your opponent.</p>
+        <div class="pulse">Waiting for opponent…</div>
+      </div>
+    </div>
+
+    <div id="disconnected" class="overlay hidden">
+      <div class="panel">
+        <h2>Disconnected</h2>
+        <p>Lost connection to the server.</p>
+        <button onclick="location.reload()" class="big">Reload</button>
+      </div>
+    </div>
+
+    <div id="ended" class="overlay hidden">
+      <div class="panel">
+        <h2 id="ended-title">Match over</h2>
+        <p id="ended-detail"></p>
+        <button onclick="location.reload()" class="big">New Match</button>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

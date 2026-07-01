@@ -1,42 +1,103 @@
 import './style.css';
-import { Game } from './game.ts';
+import { Net } from './net.ts';
+import { attachLobby, showLobbyError, showScreen, setRoomCodeDisplay, setEndedText } from './lobby.ts';
+import { ClientGame } from './game.ts';
+import { attachInput } from './input.ts';
 import { render } from './render.ts';
-import { attachInput, updateCameraFromInput } from './input.ts';
+import { WORLD_WIDTH, WORLD_HEIGHT } from '../shared/constants.ts';
 
 const canvasEl = document.getElementById('game') as HTMLCanvasElement | null;
-if (!canvasEl) throw new Error('Canvas #game not found');
+if (!canvasEl) throw new Error('Canvas not found');
 const canvas: HTMLCanvasElement = canvasEl;
 const ctx = canvas.getContext('2d');
-if (!ctx) throw new Error('2D context unavailable');
+if (!ctx) throw new Error('2D context not available');
 
-function currentSize(): { w: number; h: number } {
-  return { w: Math.max(320, window.innerWidth), h: Math.max(240, window.innerHeight) };
+const viewport = { width: window.innerWidth, height: window.innerHeight };
+function fitCanvas(): void {
+  viewport.width = window.innerWidth;
+  viewport.height = window.innerHeight;
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+}
+fitCanvas();
+window.addEventListener('resize', fitCanvas);
+
+const net = new Net();
+const game = new ClientGame();
+
+// World-space converter using the same centered layout as render.
+function screenToWorld(sx: number, sy: number): { x: number; y: number } {
+  const camX = Math.floor((viewport.width - WORLD_WIDTH) / 2);
+  const camY = Math.floor((viewport.height - WORLD_HEIGHT) / 2);
+  return { x: sx - camX, y: sy - camY };
 }
 
-const initial = currentSize();
-canvas.width = initial.w;
-canvas.height = initial.h;
+// Attach input immediately — send loop only fires once we have an own player, but ok.
+const input = attachInput({
+  canvas,
+  net,
+  screenToWorld,
+  ownHeroPos: () => {
+    const own = game.ownPlayer();
+    return own ? { x: own.x, y: own.y } : null;
+  },
+});
 
-const game = new Game(initial.w, initial.h);
-const input = attachInput(canvas, game);
+attachLobby(net, {
+  onCreate: () => net.send({ type: 'createRoom' }),
+  onJoin: (roomCode) => net.send({ type: 'joinRoom', roomCode }),
+});
 
-function handleResize(): void {
-  const s = currentSize();
-  canvas.width = s.w;
-  canvas.height = s.h;
-  game.setViewport(s.w, s.h);
-}
-window.addEventListener('resize', handleResize);
+net.onMessage((msg) => {
+  if (msg.type === 'joined') {
+    game.playerId = msg.playerId;
+    game.team = msg.team;
+    game.roomCode = msg.roomCode;
+    game.setMap(msg.mapSeed);
+    setRoomCodeDisplay(msg.roomCode);
+    showScreen('waiting');
+  } else if (msg.type === 'error') {
+    showLobbyError(msg.message);
+  } else if (msg.type === 'state') {
+    game.applySnapshot(msg.snap);
+    if (msg.snap.status === 'playing') {
+      showScreen('game');
+    } else if (msg.snap.status === 'ended' && msg.snap.winner) {
+      const youWon = msg.snap.winner === game.team;
+      setEndedText(
+        youWon ? 'Victory' : 'Defeat',
+        `Final: Red ${msg.snap.scores.red} — Blue ${msg.snap.scores.blue}`,
+      );
+      showScreen('ended');
+    }
+  }
+});
 
+net.onClose(() => {
+  showScreen('disconnected');
+});
+
+// Dev: Vite serves the client on :5173 and the ws server is separate on :3001.
+// Prod: a single Node service serves both — connect same-origin (wss on HTTPS, ws on HTTP).
+const wsUrl = import.meta.env.DEV
+  ? `ws://${location.hostname || 'localhost'}:3001`
+  : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+net.connect(wsUrl).catch(() => {
+  showLobbyError(`Cannot reach server at ${wsUrl}. Is it running?`);
+});
+
+// Render loop
 let lastTime = performance.now();
 let elapsed = 0;
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
   elapsed += dt;
-  updateCameraFromInput(game, input, dt);
-  game.update(dt);
-  render(ctx!, game, input, elapsed);
+  game.updateEffects(dt);
+  render(ctx!, game, viewport, elapsed, {
+    x: input.mouseCanvasX,
+    y: input.mouseCanvasY,
+  });
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
