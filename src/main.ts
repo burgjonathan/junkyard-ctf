@@ -3,8 +3,7 @@ import { Net } from './net.ts';
 import { attachLobby, showLobbyError, showScreen, setRoomCodeDisplay, setEndedText } from './lobby.ts';
 import { ClientGame } from './game.ts';
 import { attachInput } from './input.ts';
-import { render } from './render.ts';
-import { WORLD_WIDTH, WORLD_HEIGHT } from '../shared/constants.ts';
+import { render, computeView } from './render.ts';
 
 const canvasEl = document.getElementById('game') as HTMLCanvasElement | null;
 if (!canvasEl) throw new Error('Canvas not found');
@@ -25,11 +24,10 @@ window.addEventListener('resize', fitCanvas);
 const net = new Net();
 const game = new ClientGame();
 
-// World-space converter using the same centered layout as render.
+// World-space converter — invert the fit-to-window transform used by render.
 function screenToWorld(sx: number, sy: number): { x: number; y: number } {
-  const camX = Math.floor((viewport.width - WORLD_WIDTH) / 2);
-  const camY = Math.floor((viewport.height - WORLD_HEIGHT) / 2);
-  return { x: sx - camX, y: sy - camY };
+  const v = computeView(viewport);
+  return { x: (sx - v.offsetX) / v.scale, y: (sy - v.offsetY) / v.scale };
 }
 
 // Attach input immediately — send loop only fires once we have an own player, but ok.

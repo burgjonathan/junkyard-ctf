@@ -115,6 +115,15 @@ function paintRockTile(ctx: CanvasRenderingContext2D, tx: number, ty: number): v
 
 // ----- Public entry -----
 
+// Compute the world→screen transform used for both rendering and mouse hit-tests.
+// Fit-to-window: scale so the whole world fits with a small margin, then center.
+export function computeView(viewport: { width: number; height: number }): { scale: number; offsetX: number; offsetY: number } {
+  const scale = Math.min(viewport.width / WORLD_WIDTH, viewport.height / WORLD_HEIGHT) * 0.96;
+  const offsetX = (viewport.width - WORLD_WIDTH * scale) / 2;
+  const offsetY = (viewport.height - WORLD_HEIGHT * scale) / 2;
+  return { scale, offsetX, offsetY };
+}
+
 export function render(
   ctx: CanvasRenderingContext2D,
   game: ClientGame,
@@ -128,11 +137,11 @@ export function render(
   if (!game.map || !game.latest) return;
   ensureTerrain(game.map);
 
-  const camX = Math.floor((viewport.width - WORLD_WIDTH) / 2);
-  const camY = Math.floor((viewport.height - WORLD_HEIGHT) / 2);
+  const view = computeView(viewport);
 
   ctx.save();
-  ctx.translate(camX, camY);
+  ctx.translate(view.offsetX, view.offsetY);
+  ctx.scale(view.scale, view.scale);
 
   if (terrainCache) ctx.drawImage(terrainCache, 0, 0);
 

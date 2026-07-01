@@ -30,7 +30,7 @@ export function generateMap(seed: number): MapData {
   const tiles = new Uint8Array(MAP_WIDTH * MAP_HEIGHT);
   const rng = mulberry32(seed);
 
-  const clusterCount = 34;
+  const clusterCount = 110;
   for (let c = 0; c < clusterCount; c++) {
     // Bias clusters away from the exact center row so bases have a highway.
     const cx = Math.floor(rng() * MAP_WIDTH);
